@@ -1032,6 +1032,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bae52d6b29cf440e298856fec3965ee6fa71b06aa7495178615953fd669e5f9"
 
 [[package]]
+name = "futures-timer"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5cedfe9b6dc756220782cc1ba5bcb1fa091cdcba155e40d3556159c3db58043"
+dependencies = [
+ "futures 0.1.29",
+]
+
+[[package]]
 name = "futures-util"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2435,6 +2444,29 @@ dependencies = [
  "idna 0.2.0",
  "lazy_static",
  "regex",
+ "url 2.1.1",
+]
+
+[[package]]
+name = "pulsar"
+version = "0.3.0"
+source = "git+https://github.com/leshow/pulsar-rs#48eb65825839aa5b42fac6971c0e4d75d82f1b46"
+dependencies = [
+ "bytes",
+ "chrono",
+ "crc",
+ "futures 0.1.29",
+ "futures-timer",
+ "log 0.4.8",
+ "nom 5.1.0",
+ "prost",
+ "prost-build",
+ "prost-derive",
+ "rand 0.7.3",
+ "regex",
+ "tokio",
+ "tokio-codec",
+ "trust-dns-resolver",
  "url 2.1.1",
 ]
 
@@ -4585,6 +4617,7 @@ dependencies = [
  "prost-build",
  "prost-derive",
  "prost-types",
+ "pulsar",
  "rand 0.5.6",
  "rdkafka",
  "regex",
