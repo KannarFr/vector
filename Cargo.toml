@@ -142,6 +142,7 @@ warp = "0.1.20"
 evmap = { version = "7", features = ["bytes"] }
 logfmt = "0.0.2"
 pulsar = { path = "../pulsar-rs" }
+# pulsar = { git = "https://github.com/leshow/pulsar-rs" }
 
 [target.'cfg(unix)'.dependencies]
 atty = "0.2"
