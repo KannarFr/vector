@@ -9,7 +9,7 @@ use futures::{
     stream::FuturesUnordered,
     Async, AsyncSink, Future, Poll, Sink, StartSend, Stream,
 };
-use pulsar::{Consumer, Producer, PulsarExecutor, Pulsar};
+use pulsar::{Consumer, Producer, ProducerOptions, Pulsar, PulsarExecutor};
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::{collections::HashSet, path::PathBuf, time::Duration};
@@ -30,6 +30,7 @@ pub struct PulsarSinkConfig {
     topic: String,
     // key_field: Option<Atom>,
     encoding: Encoding,
+    batch_size: Option<u32>,
     // tls: Option<KafkaSinkTlsConfig>,
 }
 
@@ -43,12 +44,11 @@ pub enum Encoding {
 pub struct PulsarSink {
     // producer: FutureProducer,
     topic: String,
-    key_field: Option<Atom>,
+    // key_field: Option<Atom>,
     encoding: Encoding,
+    producer: Producer,
     // in_flight: FuturesUnordered<MetadataFuture<DeliveryFuture, usize>>,
     acker: Acker,
-    seq_head: usize,
-    seq_tail: usize,
     pending_acks: HashSet<usize>,
 }
 
@@ -59,9 +59,10 @@ inventory::submit! {
 #[typetag::serde(name = "pulsar")]
 impl SinkConfig for PulsarSinkConfig {
     fn build(&self, cx: SinkContext) -> crate::Result<(super::RouterSink, super::Healthcheck)> {
-        let sink = PulsarSink::new(self.clone(), cx.acker());
+        let sink = PulsarSink::new(self.clone(), cx.acker())?;
         // healthcheck
-        Ok((sink, hc))
+        // Ok((sink, hc))
+        unimplemented!()
     }
 
     fn input_type(&self) -> DataType {
@@ -74,12 +75,34 @@ impl SinkConfig for PulsarSinkConfig {
 }
 
 impl PulsarSink {
-    fn create(config: PulsarSinkConfig, acker: Acker) -> crate::Result<Box<dyn Future<Item = (), Error = ()>>> {
+    fn new(config: PulsarSinkConfig, acker: Acker) -> crate::Result<Self> {
         let mut rt = Runtime::new()?;
 
-        Box::new(future::lazy(move || {
+        let pulsar = Pulsar::new(config.address.parse()?, None, rt.executor()).wait()?;
+        let producer = pulsar.producer(Some(ProducerOptions {
+            batch_size: config.batch_size,
+            ..ProducerOptions::default()
+        }));
 
-            let pulsar = Pulsar::new(config.address,None,rt.executor()).and_then(| )
-        }))
+        Ok(Self {
+            topic: config.topic,
+            encoding: config.encoding,
+            producer,
+            acker,
+            pending_acks: HashSet::new(),
+        })
+    }
+}
+
+impl Sink for PulsarSink {
+    type SinkItem = Event;
+    type SinkError = ();
+
+    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
+        unimplemented!()
+    }
+
+    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+        unimplemented!()
     }
 }
