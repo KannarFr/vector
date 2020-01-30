@@ -41,19 +41,18 @@ pub enum Encoding {
     Json,
 }
 
-pub struct PulsarSink<F: Future> {
+pub struct PulsarSink {
     topic: String,
     encoding: Encoding,
     producer: Producer,
     pulsar: Pulsar,
-    in_flight: FuturesUnordered<Box<MetadataFuture<F, usize>>>,
+    in_flight: FuturesUnordered<SendFuture>,
     seq_head: usize,
     seq_tail: usize,
     seqno: HashSet<usize>,
 }
 
-pub type SendFuture =
-    Box<dyn Future<Item = CommandSendReceipt, Error = pulsar::Error> + 'static + Send>;
+pub type SendFuture = Box<dyn Future<Item = (CommandSendReceipt, usize), Error = pulsar::Error>>;
 // pub type MetadataFuture<F, M> = future::Join<F, future::FutureResult<M, <F as Future>::Error>>;
 
 inventory::submit! {
@@ -78,9 +77,9 @@ impl SinkConfig for PulsarSinkConfig {
     }
 }
 
-impl<F> PulsarSink<F>
-where
-    F: Future<Item = CommandSendReceipt, Error = pulsar::Error> + 'static + Send,
+impl PulsarSink
+// where
+// F: Future<Item = CommandSendReceipt, Error = pulsar::Error> + 'static + Send,
 {
     fn new(config: PulsarSinkConfig, exec: TaskExecutor) -> crate::Result<Self> {
         let pulsar = Pulsar::new(config.address.parse()?, None, exec).wait()?;
@@ -102,19 +101,23 @@ where
     }
 }
 
-impl<F> Sink for PulsarSink<F>
-where
-    F: Future<Item = CommandSendReceipt, Error = pulsar::Error> + 'static + Send,
+impl Sink for PulsarSink
+// where
+// F: Future<Item = CommandSendReceipt, Error = pulsar::Error> + 'static + Send,
 {
     type SinkItem = Event;
     type SinkError = ();
 
     fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
         let message = encode_event(item, &self.topic, self.encoding).map_err(|_| ())?;
-        let fut = self.producer.send(self.topic.clone(), &PulsarSend(message));
         let seqno = self.seq_head;
         self.seq_head += 1;
-        self.in_flight.push(Box::new(fut.join(future::ok(seqno))));
+        let fut = future::lazy(move || {
+            self.producer
+                .send(self.topic.clone(), &PulsarSend(message))
+                .join(future::ok(seqno))
+        });
+        self.in_flight.push(Box::new(fut));
         Ok(AsyncSink::Ready)
     }
 
@@ -138,6 +141,7 @@ where
 }
 
 // TODO: https://github.com/wyyerd/pulsar-rs/issues/60
+// #[derive(Clone)]
 struct PulsarSend(Vec<u8>);
 
 impl SerializeMessage for PulsarSend {
