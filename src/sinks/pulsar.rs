@@ -46,14 +46,16 @@ pub struct PulsarSink {
     encoding: Encoding,
     producer: Producer,
     pulsar: Pulsar,
-    in_flight: FuturesUnordered<SendFuture>,
+    in_flight: FuturesUnordered<MetadataFuture<SendFuture, usize>>,
+    // ack
     seq_head: usize,
     seq_tail: usize,
-    seqno: HashSet<usize>,
+    pending_acks: HashSet<usize>,
+    acker: Acker,
 }
 
-pub type SendFuture = Box<dyn Future<Item = (CommandSendReceipt, usize), Error = pulsar::Error>>;
-// pub type MetadataFuture<F, M> = future::Join<F, future::FutureResult<M, <F as Future>::Error>>;
+pub type SendFuture =
+    Box<dyn Future<Item = CommandSendReceipt, Error = pulsar::Error> + 'static + Send>;
 
 inventory::submit! {
     SinkDescription::new_without_default::<PulsarSinkConfig>("pulsar")
@@ -63,7 +65,7 @@ inventory::submit! {
 impl SinkConfig for PulsarSinkConfig {
     fn build(&self, cx: SinkContext) -> crate::Result<(super::RouterSink, super::Healthcheck)> {
         Ok((
-            Box::new(PulsarSink::new(self.clone(), cx.exec())?),
+            Box::new(PulsarSink::new(self.clone(), cx.acker(), cx.exec())?),
             healthcheck(self.clone()),
         ))
     }
@@ -77,11 +79,8 @@ impl SinkConfig for PulsarSinkConfig {
     }
 }
 
-impl PulsarSink
-// where
-// F: Future<Item = CommandSendReceipt, Error = pulsar::Error> + 'static + Send,
-{
-    fn new(config: PulsarSinkConfig, exec: TaskExecutor) -> crate::Result<Self> {
+impl PulsarSink {
+    fn new(config: PulsarSinkConfig, acker: Acker, exec: TaskExecutor) -> crate::Result<Self> {
         let pulsar = Pulsar::new(config.address.parse()?, None, exec).wait()?;
         let producer = pulsar.producer(Some(ProducerOptions {
             batch_size: config.batch_size,
@@ -96,28 +95,24 @@ impl PulsarSink
             in_flight: FuturesUnordered::new(),
             seq_head: 0,
             seq_tail: 0,
-            seqno: HashSet::new(),
+            pending_acks: HashSet::new(),
+            acker,
         })
     }
 }
 
-impl Sink for PulsarSink
-// where
-// F: Future<Item = CommandSendReceipt, Error = pulsar::Error> + 'static + Send,
-{
+impl Sink for PulsarSink {
     type SinkItem = Event;
     type SinkError = ();
 
     fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
         let message = encode_event(item, &self.topic, self.encoding).map_err(|_| ())?;
+        let fut = self.producer.send(self.topic.clone(), &PulsarSend(message));
+
         let seqno = self.seq_head;
         self.seq_head += 1;
-        let fut = future::lazy(move || {
-            self.producer
-                .send(self.topic.clone(), &PulsarSend(message))
-                .join(future::ok(seqno))
-        });
-        self.in_flight.push(Box::new(fut));
+        self.in_flight
+            .push((Box::new(fut) as SendFuture).join(future::ok(seqno)));
         Ok(AsyncSink::Ready)
     }
 
@@ -126,13 +121,20 @@ impl Sink for PulsarSink
             match self.in_flight.poll() {
                 Ok(Async::NotReady) => return Ok(Async::NotReady),
                 Ok(Async::Ready(None)) => return Ok(Async::Ready(())),
-                Ok(Async::Ready(Some(result))) => {
+                Ok(Async::Ready(Some((result, seqno)))) => {
                     trace!(
                         "produced message {:?} from {} at sequence id {}",
                         result.message_id,
                         result.producer_id,
                         result.sequence_id
                     );
+                    self.pending_acks.insert(seqno);
+                    let mut num_to_ack = 0;
+                    while self.pending_acks.remove(&self.seq_tail) {
+                        num_to_ack += 1;
+                        self.seq_tail += 1;
+                    }
+                    self.acker.ack(num_to_ack);
                 }
                 Err(e) => error!("future cancelled: {}", e),
             }
@@ -141,7 +143,6 @@ impl Sink for PulsarSink
 }
 
 // TODO: https://github.com/wyyerd/pulsar-rs/issues/60
-// #[derive(Clone)]
 struct PulsarSend(Vec<u8>);
 
 impl SerializeMessage for PulsarSend {
