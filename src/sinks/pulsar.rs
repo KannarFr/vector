@@ -12,7 +12,7 @@ use futures::{
 };
 use pulsar::{
     proto::CommandSendReceipt, Consumer, Producer, ProducerOptions, Pulsar, PulsarExecutor,
-    SerializeMessage,
+    SerializeMessage, SubType,
 };
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
@@ -64,10 +64,9 @@ inventory::submit! {
 #[typetag::serde(name = "pulsar")]
 impl SinkConfig for PulsarSinkConfig {
     fn build(&self, cx: SinkContext) -> crate::Result<(super::RouterSink, super::Healthcheck)> {
-        Ok((
-            Box::new(PulsarSink::new(self.clone(), cx.acker(), cx.exec())?),
-            healthcheck(self.clone()),
-        ))
+        let sink = PulsarSink::new(self.clone(), cx.acker(), cx.exec())?;
+        let hc = healthcheck(self, &sink.pulsar)?;
+        Ok((Box::new(sink), hc))
     }
 
     fn input_type(&self) -> DataType {
@@ -166,6 +165,14 @@ fn encode_event<S: AsRef<str>>(item: Event, topic: S, enc: Encoding) -> crate::R
     Ok(data)
 }
 
-fn healthcheck(config: PulsarSinkConfig) -> super::Healthcheck {
+fn healthcheck(config: &PulsarSinkConfig, pulsar: &Pulsar) -> crate::Result<super::Healthcheck> {
+    let consumer = pulsar
+        .consumer()
+        .with_topic(&config.topic)
+        .with_consumer_name("Healthcheck")
+        .with_subscription_type(SubType::Exclusive)
+        .with_subscription("HealthSubscription")
+        .build::<String>();
+    // Box::new(move || {})
     unimplemented!()
 }
