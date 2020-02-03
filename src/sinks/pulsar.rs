@@ -11,7 +11,7 @@ use futures::{
     Async, AsyncSink, Future, Poll, Sink, StartSend, Stream,
 };
 use pulsar::{
-    proto::CommandSendReceipt, Consumer, Producer, ProducerOptions, Pulsar, PulsarExecutor,
+    proto::Authentication, CommandSendReceipt, Consumer, Producer, ProducerOptions, Pulsar, PulsarExecutor,
     SerializeMessage, SubType,
 };
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,8 @@ pub struct PulsarSinkConfig {
     topic: String,
     encoding: Encoding,
     batch_size: Option<u32>,
+    auth_name: String, // "token"
+    auth_token: String // <jwt token>
 }
 
 #[derive(Deserialize, Serialize, Debug, Eq, PartialEq, Clone, Copy)]
@@ -80,7 +82,15 @@ impl SinkConfig for PulsarSinkConfig {
 
 impl PulsarSink {
     fn new(config: PulsarSinkConfig, acker: Acker, exec: TaskExecutor) -> crate::Result<Self> {
-        let pulsar = Pulsar::new(config.address.parse()?, None, exec).wait()?;
+        let auth = Some(Authentication {
+            name: config.auth_name.parse()?,
+            data: config.auth_token.parse()?,
+        });
+        let pulsar = Pulsar::new(
+            config.address.parse()?,
+            auth,
+            exec
+        ).wait()?;
         let producer = pulsar.producer(Some(ProducerOptions {
             batch_size: config.batch_size,
             ..ProducerOptions::default()
